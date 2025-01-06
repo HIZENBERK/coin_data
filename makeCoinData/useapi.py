@@ -2,22 +2,22 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import os
+import time
 
-
-def fetch_upbit_candles(market: str, interval: str, start_date: str, end_date: str):
+def fetch_upbit_candles(market: str, interval: int, start_date: str, end_date: str):
     """
     Upbit 캔들 데이터를 수집하여 Pandas DataFrame으로 반환.
 
     Args:
         market (str): 시장 (예: 'KRW-BTC').
-        interval (str): 캔들 종류 ('minute1', 'minute10', 'minute60', 'day', 'week', 'month').
+        interval (int): 캔들 간격 (분 단위, 예: 1, 10, 60).
         start_date (str): 수집 시작 날짜 (YYYY-MM-DD).
         end_date (str): 수집 종료 날짜 (YYYY-MM-DD).
 
     Returns:
         pd.DataFrame: 캔들 데이터.
     """
-    base_url = f"https://api.upbit.com/v1/candles/{interval}"
+    base_url = f"https://api.upbit.com/v1/candles/minutes/{interval}"
     headers = {"Accept": "application/json"}
     results = []
 
@@ -56,8 +56,18 @@ def fetch_upbit_candles(market: str, interval: str, start_date: str, end_date: s
         # 마지막 데이터의 시간으로 이동
         start_time += timedelta(hours=len(data))
 
-    return pd.DataFrame(results)
+        # Remaining-Req 헤더를 확인하여 요청 속도 조절
+        remaining_req = response.headers.get("Remaining-Req")
+        if remaining_req:
+            try:
+                sec_limit = int(remaining_req.split("sec=")[1])
+                time.sleep(max(1 / sec_limit, 0.1))  # 요청 간 최소 간격 유지
+            except (IndexError, ValueError):
+                time.sleep(0.2)
+        else:
+            time.sleep(0.2)
 
+    return pd.DataFrame(results)
 
 # KRW 거래 가능한 모든 코인 티커 가져오기
 response = requests.get("https://api.upbit.com/v1/market/all", headers={"Accept": "application/json"})
@@ -66,7 +76,7 @@ krw_tickers = [market["market"] for market in markets if market["market"].starts
 print(f"총 {len(krw_tickers)}개의 코인을 찾았습니다.")
 
 # 데이터 저장 폴더 생성
-output_dir = "../price_data"
+output_dir = "F:\\work space\\coin\\price_data"
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
@@ -77,12 +87,12 @@ end_year = datetime.now().year
 for year in range(start_year, end_year + 1):
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
-
+    
     yearly_data = []
-
+    
     for ticker in krw_tickers:
         print(f"Fetching data for {ticker} in {year}...")
-        df = fetch_upbit_candles(ticker, "minute60", start_date, end_date)
+        df = fetch_upbit_candles(ticker, 60, start_date, end_date)
 
         if not df.empty:
             df["ticker"] = ticker

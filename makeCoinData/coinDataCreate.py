@@ -42,7 +42,7 @@ df_final = pd.concat(df_list, axis=1)
 
 # 폴더 확인 및 저장
 #F:\\work space\\coin\\price_data
-output_dir = '..\\price_data'
+output_dir = 'F:\\work space\\coin\\price_data'
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
