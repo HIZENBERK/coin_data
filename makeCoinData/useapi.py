@@ -32,7 +32,20 @@ def fetch_upbit_candles(market: str, interval: int, start_date: str, end_date: s
             "count": 200  # Upbit API는 한 번에 최대 200개까지 반환
         }
 
-        response = requests.get(base_url, headers=headers, params=params)
+        retry_count = 0
+        max_retries = 5
+        while retry_count < max_retries:
+            response = requests.get(base_url, headers=headers, params=params)
+            if response.status_code == 429:  # Too Many Requests
+                print("429 Too Many Requests. Retrying...")
+                time.sleep(1)  # 재시도 전 대기
+                retry_count += 1
+            else:
+                break
+
+        if retry_count == max_retries:
+            print(f"Max retries exceeded for {market} at {query_time}. Skipping...")
+            continue
 
         if response.status_code != 200:
             print(f"Error fetching data for {market} at {query_time}: {response.status_code}")
@@ -49,8 +62,8 @@ def fetch_upbit_candles(market: str, interval: int, start_date: str, end_date: s
                 "high": item["high_price"],
                 "low": item["low_price"],
                 "close": item["trade_price"],
-                "volume": item["candle_acc_trade_volume"],
-                "value": item["candle_acc_trade_price"]
+                "volume": item["candle_acc_trade_volume"], #누적거래량
+                "value": item["candle_acc_trade_price"] #누적 거래 금액
             })
 
         # 마지막 데이터의 시간으로 이동
@@ -61,11 +74,17 @@ def fetch_upbit_candles(market: str, interval: int, start_date: str, end_date: s
         if remaining_req:
             try:
                 sec_limit = int(remaining_req.split("sec=")[1])
-                time.sleep(max(1 / sec_limit, 0.1))  # 요청 간 최소 간격 유지
+                if sec_limit > 0:
+                    time.sleep(max(1 / sec_limit, 0.1))  # 요청 간 최소 간격 유지
+                else:
+                    print("Warning: sec_limit is 0. Using default sleep time.")
+                    time.sleep(0.5)  # 기본 대기 시간
             except (IndexError, ValueError):
-                time.sleep(0.2)
+                print("Error parsing Remaining-Req header. Using default sleep time.")
+                time.sleep(0.5)  # 기본 대기 시간
         else:
-            time.sleep(0.2)
+            print("Remaining-Req header not found. Using default sleep time.")
+            time.sleep(0.5)  # 기본 대기 시간
 
     return pd.DataFrame(results)
 
