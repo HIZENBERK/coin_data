@@ -13,8 +13,8 @@ from sklearn.preprocessing import StandardScaler
 import os
 import json
 import matplotlib.pyplot as plt
-from datetime import datetime
-import seaborn as sns
+from tensorflow.keras.constraints import MaxNorm
+
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
@@ -151,66 +151,58 @@ def print_data_info(df):
 def build_lstm_model(hp):
     model = Sequential()
     model.add(LSTM(
-        units=hp.Int('units', min_value=32, max_value=128, step=32),
+        units=hp.Int('units_1', min_value=32, max_value=64, step=32),
         input_shape=(60, 9),
         return_sequences=True,
         kernel_initializer='glorot_uniform',
         recurrent_initializer='orthogonal',
-        kernel_constraint=tf.keras.constraints.MaxNorm(3),
-        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
-        bias_constraint=tf.keras.constraints.MaxNorm(3)
+        kernel_constraint=MaxNorm(3),
+        recurrent_constraint=MaxNorm(3),
+        bias_constraint=MaxNorm(3)
     ))
     model.add(BatchNormalization())
-    model.add(Dropout(hp.Float('dropout1', 0.1, 0.3, step=0.1)))
-    
+    model.add(Dropout(hp.Choice('dropout1', [0.3, 0.5, 0.7])))
+
     model.add(LSTM(
-        units=hp.Int('units', min_value=16, max_value=64, step=16),
+        units=hp.Int('units_2', min_value=32, max_value=64, step=32),
         return_sequences=False,
         kernel_initializer='glorot_uniform',
         recurrent_initializer='orthogonal',
-        kernel_constraint=tf.keras.constraints.MaxNorm(3),
-        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
-        bias_constraint=tf.keras.constraints.MaxNorm(3)
+        kernel_constraint=MaxNorm(3),
+        recurrent_constraint=MaxNorm(3),
+        bias_constraint=MaxNorm(3)
     ))
     model.add(BatchNormalization())
-    model.add(BatchNormalization(epsilon=1e-5))
-    model.add(Dropout(hp.Float('dropout2', 0.1, 0.3, step=0.1)))
-    
+    model.add(Dropout(hp.Choice('dropout2', [0.3, 0.5, 0.7])))
+
     model.add(Dense(32, activation='relu'))
     model.add(BatchNormalization())
-    model.add(Dropout(hp.Float('dropout3', 0.1, 0.3, step=0.1)))
-    
+    model.add(Dropout(hp.Choice('dropout3', [0.3, 0.5, 0.7])))
+
     model.add(Dense(1))
-    
+
     optimizer = Adam(
-        learning_rate=hp.Choice('lr', [1e-4, 1e-3, 1e-2]),
-        clipnorm=0.5
+        learning_rate=hp.Choice('lr', [1e-4, 1e-3])
     )
-    
+
     model.compile(
         optimizer=optimizer,
         loss=Huber(delta=1.0)
     )
     return model
 
-# LSTM 모델 튜닝 및 학습
 def tune_and_train_lstm(X_train, y_train, X_val, y_val):
-    print(f"Input shapes - X_train: {X_train.shape}, y_train: {y_train.shape}")
-    
-    # 데이터 체크
-    print("Data statistics:")
-    print(f"X_train mean: {np.mean(X_train)}, std: {np.std(X_train)}")
-    print(f"y_train mean: {np.mean(y_train)}, std: {np.std(y_train)}")
-    
+    # Random Search with updated parameters
     tuner = RandomSearch(
         build_lstm_model,
         objective='val_loss',
-        max_trials=5,
-        executions_per_trial=3,
-        directory='F:/work space/coin/price_data/models/searching',
-        project_name='lstm_tuning'
+        max_trials=3,  # Reduced trials for faster tuning
+        executions_per_trial=3,  # Stability through averaging
+        directory='./model_tuning',
+        project_name='lstm_tuning_v2'
     )
-    
+
+    # Updated Callbacks
     callbacks = [
         TerminateOnNaN(),
         tf.keras.callbacks.EarlyStopping(
@@ -221,40 +213,36 @@ def tune_and_train_lstm(X_train, y_train, X_val, y_val):
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
-            patience=3,
+            patience=5,  # Reduced sensitivity to loss changes
             min_lr=1e-6,
             verbose=1
         )
     ]
-    
-    try:
-        tuner.search(
-            X_train, 
-            y_train,
-            epochs=20,
-            batch_size=32,
-            validation_split=0.2,
-            callbacks=callbacks,
-            verbose=1
-        )
-    except Exception as e:
-        print(f"Tuning failed: {e}")
-        return None
-        
+
+    # Hyperparameter search
+    tuner.search(
+        X_train,
+        y_train,
+        epochs=5,  # Reduced epochs for tuning speed
+        batch_size=32,
+        validation_split=0.2,
+        callbacks=callbacks,
+        verbose=1
+    )
+
+    # Retrieve the best hyperparameters and train the final model
     best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
     model = tuner.hypermodel.build(best_hps)
-    
-    # 최종 모델 학습
+
     model.fit(
         X_train,
         y_train,
-        epochs=50,
+        epochs=10,  # Increased epochs for final training
         batch_size=32,
         validation_data=(X_val, y_val),
         callbacks=callbacks,
         verbose=1
     )
-    
     return model
 
 # 모델 저장

@@ -62,7 +62,7 @@ def train_and_evaluate(X_train, y_train, X_val, y_val):
 # 메인 함수
 def main():
     data_dir = "F:/work space/coin/price_data/label"
-    start_year, end_year = 2019, 2025
+    start_year, end_year = 2020, 2025
     df = load_data(data_dir, start_year, end_year)
 
     # 티커별 데이터 처리

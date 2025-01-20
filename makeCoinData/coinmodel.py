@@ -20,6 +20,8 @@ import os
 import json
 from keras.layers import BatchNormalization
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.constraints import MaxNorm
+from sklearn.model_selection import KFold
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
@@ -52,16 +54,6 @@ def objective(trial, X_train, y_train, X_val, y_val):
     mse = np.mean((xgb_pred_gpu - y_val) ** 2)
     
     return mse  # MSE가 낮을수록 좋음
-
-# Optuna 최적화 함수
-def optimize_xgb_model(X_train, y_train, X_val, y_val):
-    study = optuna.create_study(direction='minimize')  # MSE 최소화
-    study.optimize(lambda trial: objective(trial, X_train, y_train, X_val, y_val), n_trials=50)
-    
-    # 최적 파라미터 출력
-    print("Best hyperparameters: ", study.best_params)
-    
-    return study.best_params
 
 # 데이터 로드
 def load_data(file_path):
@@ -124,124 +116,63 @@ def reshape_for_lgb_rf(X_train, X_val):
     return X_train_lgb_rf, X_val_lgb_rf
 
 # LSTM 모델 생성
-"""
-def build_lstm_model(hp):
-    model = Sequential()
-    model.add(LSTM(hp.Int('units1', 50, 150, step=25), return_sequences=True, input_shape=(60, 9)))
-    model.add(Dropout(hp.Float('dropout1', 0.1, 0.5, step=0.1)))
-    model.add(LSTM(hp.Int('units2', 50, 150, step=25)))
-    model.add(Dropout(hp.Float('dropout2', 0.1, 0.5, step=0.1)))
-    model.add(Dense(1))
-    model.compile(optimizer=Adam(learning_rate=hp.Choice('lr', [0.00000000000000000001, 0.00000000000005, 0.00000000000000001])), loss='mean_squared_error')
-    return model
-"""
 def build_lstm_model(hp):
     model = Sequential()
     model.add(LSTM(
-        units=hp.Int('units', min_value=32, max_value=128, step=32),
+        units=hp.Int('units_1', min_value=32, max_value=64, step=32),
         input_shape=(60, 9),
         return_sequences=True,
-        kernel_initializer='glorot_uniform',  # Xavier/Glorot 초기화
-        recurrent_initializer='orthogonal',   # 직교 행렬 초기화
-        # Gradient Clipping 강화
-        kernel_constraint=tf.keras.constraints.MaxNorm(3),
-        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
-        bias_constraint=tf.keras.constraints.MaxNorm(3)
+        kernel_initializer='glorot_uniform',
+        recurrent_initializer='orthogonal',
+        kernel_constraint=MaxNorm(3),
+        recurrent_constraint=MaxNorm(3),
+        bias_constraint=MaxNorm(3)
     ))
-    model.add(BatchNormalization())  # 배치 정규화 추가
-    model.add(Dropout(hp.Float('dropout1', 0.1, 0.3, step=0.1)))
-    
+    model.add(BatchNormalization())
+    model.add(Dropout(hp.Choice('dropout1', [0.3, 0.5, 0.7])))
+
     model.add(LSTM(
-        units=hp.Int('units', min_value=16, max_value=64, step=16),
+        units=hp.Int('units_2', min_value=32, max_value=64, step=32),
         return_sequences=False,
         kernel_initializer='glorot_uniform',
         recurrent_initializer='orthogonal',
-        kernel_constraint=tf.keras.constraints.MaxNorm(3),
-        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
-        bias_constraint=tf.keras.constraints.MaxNorm(3)
+        kernel_constraint=MaxNorm(3),
+        recurrent_constraint=MaxNorm(3),
+        bias_constraint=MaxNorm(3)
     ))
     model.add(BatchNormalization())
-    model.add(Dropout(hp.Float('dropout2', 0.1, 0.3, step=0.1)))
-    
+    model.add(Dropout(hp.Choice('dropout2', [0.3, 0.5, 0.7])))
+
     model.add(Dense(32, activation='relu'))
     model.add(BatchNormalization())
-    model.add(Dropout(hp.Float('dropout3', 0.1, 0.3, step=0.1)))
-    
+    model.add(Dropout(hp.Choice('dropout3', [0.3, 0.5, 0.7])))
+
     model.add(Dense(1))
-    
+
     optimizer = Adam(
-        learning_rate=hp.Choice('lr', [1e-4, 5e-4, 1e-3]),  # learning rate 범위 조정
-        clipnorm=1.0  # gradient clipping 추가
+        learning_rate=hp.Choice('lr', [1e-4, 1e-3])
     )
-    
+
     model.compile(
         optimizer=optimizer,
-        loss=Huber(delta=1.0)  # Huber loss의 delta 값 명시
+        loss=Huber(delta=1.0)
     )
     return model
 
-# LSTM 최적화 함수도 수정
 def tune_lstm_model(X_train, y_train):
-    print(f"Input shapes - X_train: {X_train.shape}, y_train: {y_train.shape}")
-    
-    # 데이터 체크
-    print("Data statistics:")
-    print(f"X_train mean: {np.mean(X_train)}, std: {np.std(X_train)}")
-    print(f"y_train mean: {np.mean(y_train)}, std: {np.std(y_train)}")
-    print("NaN in X_train:", np.isnan(X_train).any())
-    print("NaN in y_train:", np.isnan(y_train).any())
-    print("Inf in X_train:", np.isinf(X_train).any())
-    print("Inf in y_train:", np.isinf(y_train).any())
-    
-    # 튜너 설정
+    # Random Search with updated parameters
     tuner = RandomSearch(
         build_lstm_model,
         objective='val_loss',
-        max_trials=5,  # 시도 횟수 줄임
+        max_trials=3,
         executions_per_trial=3,
-        directory='F:\work space\coin\price_data\models\searching',
-        project_name='lstm_tuning'
+        directory='./model_tuning',
+        project_name='lstm_tuning_v2'
     )
-    
-    # 콜백 설정
-    callbacks = [
-        TerminateOnNaN(),
-        EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
-            patience=3,
-            min_lr=1e-6,
-            verbose=1
-        )
-    ]
-    
-    try:
-        tuner.search(
-            X_train, 
-            y_train,
-            epochs=20,
-            batch_size=64,  # 배치 사이즈 증가
-            validation_split=0.2,
-            callbacks=callbacks,
-            verbose=1
-        )
-    except Exception as e:
-        print(f"Tuning failed: {e}")
-        
-    best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-    model = tuner.hypermodel.build(best_hps)
-    
-    return model, best_hps
 
-# LightGBM 및 XGBoost 모델 학습
-def train_models(X_train, y_train, X_val, y_val):
-    print("Training LSTM...")
-    X_train_lstm = np.expand_dims(X_train, axis=-1)
-    X_val_lstm = np.expand_dims(X_val, axis=-1)
-    lstm_model, best_hps = tune_lstm_model(X_train_lstm, y_train)
-    # Early stopping과 learning rate 조정 추가
+    # Updated Callbacks
     callbacks = [
+        tf.keras.callbacks.TerminateOnNaN(),
         tf.keras.callbacks.EarlyStopping(
             monitor='val_loss',
             patience=5,
@@ -250,61 +181,185 @@ def train_models(X_train, y_train, X_val, y_val):
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
-            patience=3,
-            min_lr=1e-6
-        ),
-        TerminateOnNaN()
+            patience=5,
+            min_lr=1e-6,
+            verbose=1
+        )
     ]
+
+    try:
+        tuner.search(
+            X_train, 
+            y_train,
+            epochs=5,
+            batch_size=32,
+            validation_split=0.2,
+            callbacks=callbacks,
+            verbose=1
+        )
+    except Exception as e:
+        print(f"Tuning failed: {e}")
+        return None, None
+
+    best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+    model = tuner.hypermodel.build(best_hps)
     
-    lstm_model.fit(
-        X_train, 
+    # Final training with best hyperparameters
+    model.fit(
+        X_train,
         y_train,
-        epochs=50,
+        epochs=20,
         batch_size=32,
         validation_split=0.2,
         callbacks=callbacks,
         verbose=1
     )
-    lstm_pred = lstm_model.predict(X_val_lstm)
-    print(lstm_pred)
-    print("Training LightGBM...")
+    
+    return model, best_hps
+
+def objective_lgb(trial, X_train, y_train, X_val, y_val):
+    param = {
+        'objective': 'regression',
+        'metric': 'mse',
+        'verbosity': -1,
+        'boosting_type': 'gbdt',
+        'device': 'gpu',
+        
+        # 트리 구조 관련 파라미터
+        'num_leaves': trial.suggest_int('num_leaves', 20, 3000),
+        'max_depth': trial.suggest_int('max_depth', 3, 12),
+        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 10, 100),
+        
+        # 학습 관련 파라미터
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1e-1),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        'feature_fraction': trial.suggest_uniform('feature_fraction', 0.4, 1.0),
+        'bagging_fraction': trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
+        'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
+        
+        # 정규화 관련 파라미터
+        'lambda_l1': trial.suggest_loguniform('lambda_l1', 1e-8, 10.0),
+        'lambda_l2': trial.suggest_loguniform('lambda_l2', 1e-8, 10.0),
+        'min_gain_to_split': trial.suggest_loguniform('min_gain_to_split', 1e-8, 1.0)
+    }
+    
+    # Cross-validation을 통한 안정적인 성능 평가
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = []
+    
+    for train_idx, valid_idx in kf.split(X_train):
+        X_t, X_v = X_train[train_idx], X_train[valid_idx]
+        y_t, y_v = y_train[train_idx], y_train[valid_idx]
+        
+        train_data = lgb.Dataset(X_t, label=y_t)
+        valid_data = lgb.Dataset(X_v, label=y_v, reference=train_data)
+        
+        model = lgb.train(param, train_data, valid_sets=[valid_data], 
+                         num_boost_round=param['n_estimators'],
+                         early_stopping_rounds=50,
+                         verbose_eval=False)
+                         
+        pred = model.predict(X_v)
+        score = mean_squared_error(y_v, pred)
+        scores.append(score)
+    
+    return np.mean(scores)
+
+def objective_xgb(trial, X_train, y_train, X_val, y_val):
+    param = {
+        'objective': 'reg:squarederror',
+        'tree_method': 'gpu_hist',
+        'gpu_id': 0,
+        
+        # 트리 구조 관련 파라미터
+        'max_depth': trial.suggest_int('max_depth', 3, 12),
+        'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
+        'gamma': trial.suggest_loguniform('gamma', 1e-8, 1.0),
+        
+        # 학습 관련 파라미터
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1e-1),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        'subsample': trial.suggest_uniform('subsample', 0.4, 1.0),
+        'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.4, 1.0),
+        
+        # 정규화 관련 파라미터
+        'reg_alpha': trial.suggest_loguniform('reg_alpha', 1e-8, 10.0),
+        'reg_lambda': trial.suggest_loguniform('reg_lambda', 1e-8, 10.0),
+    }
+    
+    # Cross-validation을 통한 안정적인 성능 평가
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = []
+    
+    for train_idx, valid_idx in kf.split(X_train):
+        X_t, X_v = X_train[train_idx], X_train[valid_idx]
+        y_t, y_v = y_train[train_idx], y_train[valid_idx]
+        
+        model = xgb.XGBRegressor(**param)
+        model.fit(X_t, y_t,
+                 eval_set=[(X_v, y_v)],
+                 early_stopping_rounds=50,
+                 verbose=False)
+        
+        pred = model.predict(X_v)
+        score = mean_squared_error(y_v, pred)
+        scores.append(score)
+    
+    return np.mean(scores)
+
+def optimize_models(X_train, y_train, X_val, y_val, n_trials=50):
+    # LightGBM 최적화
+    print("Optimizing LightGBM...")
+    study_lgb = optuna.create_study(direction='minimize')
+    study_lgb.optimize(lambda trial: objective_lgb(trial, X_train, y_train, X_val, y_val), 
+                      n_trials=n_trials)
+    
+    # XGBoost 최적화
+    print("\nOptimizing XGBoost...")
+    study_xgb = optuna.create_study(direction='minimize')
+    study_xgb.optimize(lambda trial: objective_xgb(trial, X_train, y_train, X_val, y_val), 
+                      n_trials=n_trials)
+    
+    print("\nBest LightGBM parameters:", study_lgb.best_params)
+    print("Best XGBoost parameters:", study_xgb.best_params)
+    
+    return study_lgb.best_params, study_xgb.best_params
+
+# LightGBM 및 XGBoost 모델 학습
+def train_models(X_train, y_train, X_val, y_val):
+    print("Training LSTM...")
+    lstm_model, best_hps = tune_lstm_model(X_train, y_train)
+    
+    if lstm_model is None:
+        print("LSTM model training failed")
+        return None, None, None, None, None, None
+        
+    lstm_pred = lstm_model.predict(X_val)
     
     # 2차원 배열로 변환
     X_train_lgb_rf, X_val_lgb_rf = reshape_for_lgb_rf(X_train, X_val)
     
-    lgb_params = {
-        'n_estimators': [100, 200, 300, 500],
-        'learning_rate': [0.0000001, 0.0000005, 0.000001, 0.000002],
-        'max_depth': [10, 20, 30, -1],
-        'device': ['gpu'],  # GPU 사용 설정을 리스트로 감싸기
-        'boosting_type': ['gbdt'],  # GBDT(Gradient Boosting Decision Tree) 사용
-    }
-    lgb_model = GridSearchCV(lgb.LGBMRegressor(), lgb_params, cv=3, n_jobs=-1, verbose=1)
-    lgb_model.fit(X_train_lgb_rf, y_train)
+    # LightGBM과 XGBoost 파라미터 최적화
+    lgb_params, xgb_params = optimize_models(X_train_lgb_rf, y_train, X_val_lgb_rf, y_val)
+    
+    # LightGBM 모델 학습
+    print("\nTraining LightGBM with optimal parameters...")
+    lgb_model = lgb.LGBMRegressor(**lgb_params)
+    lgb_model.fit(X_train_lgb_rf, y_train,
+                 eval_set=[(X_val_lgb_rf, y_val)],
+                 early_stopping_rounds=50,
+                 verbose=False)
     lgb_pred = lgb_model.predict(X_val_lgb_rf)
-    print(f"Best LightGBM params: {lgb_model.best_params_}")
-
-    print("Training XGBoost...")
-    best_params = optimize_xgb_model(X_train_lgb_rf, y_train, X_val_lgb_rf, y_val)
     
-    # 최적의 하이퍼파라미터로 XGBoost 모델 학습
-    rf_model = xgb.XGBRegressor(
-        n_estimators=best_params['n_estimators'],
-        max_depth=best_params['max_depth'],
-        min_child_weight=best_params['min_child_weight'],
-        learning_rate=best_params['learning_rate'],
-        tree_method='gpu_hist',  # GPU에서 histogram 방식으로 학습
-        gpu_id=0,                # 첫 번째 GPU 사용
-        random_state=42
-    )
-    
-    # 모델 학습
-    rf_model.fit(X_train_lgb_rf, y_train)
-    
-    # 검증 데이터셋에 대한 예측
+    # XGBoost 모델 학습
+    print("Training XGBoost with optimal parameters...")
+    rf_model = xgb.XGBRegressor(**xgb_params)
+    rf_model.fit(X_train_lgb_rf, y_train,
+                eval_set=[(X_val_lgb_rf, y_val)],
+                early_stopping_rounds=50,
+                verbose=False)
     rf_pred = rf_model.predict(X_val_lgb_rf)
-    print(f"Best XGBoost params: {rf_model.get_params()}")
-
+    
     return rf_model, lgb_model, lstm_model, rf_pred, lgb_pred, lstm_pred
 
 # Stacking 모델
@@ -356,18 +411,17 @@ def save_models(meta_model, rf_model, lgb_model, lstm_model, scaler, target_scal
     return model_paths
 
 # 데이터 로드
-start_year, end_year = 2019, 2025
+start_year, end_year = 2020, 2025
 data_dir = "F:/work space/coin/price_data/label"
 df = load_multiple_years_data(start_year, end_year, data_dir)
 
 # 특정 ticker만 학습
 selected_tickers = ['KRW-BTC', 'KRW-ETH']
 ticker_data = preprocess_ticker_data(df, selected_tickers)
-
-all_meta_models = {}
+all_models_info = {}
 
 for ticker, (X, y, scaler, target_scaler) in ticker_data.items():
-    print(f"Processing ticker: {ticker}")
+    print(f"\nProcessing ticker: {ticker}")
     
     # 학습 데이터와 검증 데이터 분할
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
@@ -375,31 +429,41 @@ for ticker, (X, y, scaler, target_scaler) in ticker_data.items():
     # 모델 학습
     rf_model, lgb_model, lstm_model, rf_pred, lgb_pred, lstm_pred = train_models(X_train, y_train, X_val, y_val)
     
+    if rf_model is None or lgb_model is None or lstm_model is None:
+        print(f"Skipping {ticker} due to failed model training")
+        continue
+    
     # Stacking 모델 학습
     meta_model = stack_models(rf_pred, lgb_pred, lstm_pred, y_val)
     
-    # Stacked 예측
+    # Stacked 예측 및 성능 평가
     stacked_preds = np.column_stack((rf_pred, lgb_pred, lstm_pred))
     final_preds = meta_model.predict(stacked_preds)
-    
-    # 성능 평가
     mse = mean_squared_error(y_val, final_preds)
     print(f"{ticker} - Mean Squared Error: {mse}")
     
-    # 모든 모델 저장
-    model_paths = save_models(
-        meta_model, 
-        rf_model, 
-        lgb_model, 
-        lstm_model, 
-        scaler,
-        target_scaler,
-        mse, 
-        ticker
+    # 모델 및 관련 정보 저장
+    model_info = save_models(
+        meta_model=meta_model,
+        rf_model=rf_model,
+        lgb_model=lgb_model,
+        lstm_model=lstm_model,
+        scaler=scaler,
+        target_scaler=target_scaler,
+        score=mse,
+        best_hps=lstm_model.get_config(),  # LSTM 설정 저장
+        lgb_params=lgb_model.get_params(),  # LightGBM 파라미터 저장
+        xgb_params=rf_model.get_params(),   # XGBoost 파라미터 저장
+        ticker=ticker
     )
     
-    # 모든 메타 모델 저장
-    all_meta_models[ticker] = {
-        'model': meta_model,
-        'paths': model_paths
-    }
+    # 모델 정보 저장
+    all_models_info[ticker] = model_info
+
+# 전체 모델 정보를 JSON 파일로 저장
+output_dir = "F:/work space/coin/price_data/models"
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+with open(f"{output_dir}/all_models_info_{timestamp}.json", 'w', encoding='utf-8') as f:
+    json.dump(all_models_info, f, indent=4, ensure_ascii=False)
+
+print("\nAll models have been trained and saved successfully!")
