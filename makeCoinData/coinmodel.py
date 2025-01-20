@@ -221,50 +221,43 @@ def objective_lgb(trial, X_train, y_train, X_val, y_val):
     param = {
         'objective': 'regression',
         'metric': 'mse',
-        'verbosity': -1,
-        'boosting_type': 'gbdt',
-        'device': 'gpu',
-        
-        # 트리 구조 관련 파라미터
         'num_leaves': trial.suggest_int('num_leaves', 20, 3000),
         'max_depth': trial.suggest_int('max_depth', 3, 12),
-        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 10, 100),
-        
-        # 학습 관련 파라미터
-        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1e-1),
-        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
-        'feature_fraction': trial.suggest_uniform('feature_fraction', 0.4, 1.0),
-        'bagging_fraction': trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
+        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 20, 100),
+        'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-1, log=True),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 500),
+        'feature_fraction': trial.suggest_float('feature_fraction', 0.4, 1.0),
+        'bagging_fraction': trial.suggest_float('bagging_fraction', 0.4, 1.0),
         'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
-        
-        # 정규화 관련 파라미터
-        'lambda_l1': trial.suggest_loguniform('lambda_l1', 1e-8, 10.0),
-        'lambda_l2': trial.suggest_loguniform('lambda_l2', 1e-8, 10.0),
-        'min_gain_to_split': trial.suggest_loguniform('min_gain_to_split', 1e-8, 1.0)
+        'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+        'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+        'min_gain_to_split': trial.suggest_float('min_gain_to_split', 1e-8, 1.0, log=True)
     }
     
-    # Cross-validation을 통한 안정적인 성능 평가
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    scores = []
+    # 데이터셋 생성
+    train_data = lgb.Dataset(X_train, label=y_train)
+    valid_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
     
-    for train_idx, valid_idx in kf.split(X_train):
-        X_t, X_v = X_train[train_idx], X_train[valid_idx]
-        y_t, y_v = y_train[train_idx], y_train[valid_idx]
-        
-        train_data = lgb.Dataset(X_t, label=y_t)
-        valid_data = lgb.Dataset(X_v, label=y_v, reference=train_data)
-        
-        model = lgb.train(param, train_data, valid_sets=[valid_data], 
-                         num_boost_round=param['n_estimators'],
-                         early_stopping_rounds=50,
-                         verbose_eval=False)
-                         
-        pred = model.predict(X_v)
-        score = mean_squared_error(y_v, pred)
-        scores.append(score)
+    # callbacks 설정
+    callbacks = [
+        lgb.early_stopping(stopping_rounds=50),
+        lgb.log_evaluation(period=100)
+    ]
     
-    return np.mean(scores)
-
+    # 모델 학습
+    model = lgb.train(
+        param,
+        train_data,
+        valid_sets=[valid_data],
+        callbacks=callbacks
+    )
+    
+    # 검증 데이터에 대한 예측
+    y_pred = model.predict(X_val)
+    mse = mean_squared_error(y_val, y_pred)
+    
+    return mse
+"""
 def objective_xgb(trial, X_train, y_train, X_val, y_val):
     param = {
         'objective': 'reg:squarederror',
@@ -298,8 +291,52 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
         model = xgb.XGBRegressor(**param)
         model.fit(X_t, y_t,
                  eval_set=[(X_v, y_v)],
-                 early_stopping_rounds=50,
+                 callbacks=[xgb.callback.EarlyStopping(rounds=50)],
                  verbose=False)
+        
+        pred = model.predict(X_v)
+        score = mean_squared_error(y_v, pred)
+        scores.append(score)
+    
+    return np.mean(scores)
+"""
+def objective_xgb(trial, X_train, y_train, X_val, y_val):
+    param = {
+        'objective': 'reg:squarederror',
+        'tree_method': 'hist',
+        "device" : "cuda",
+        #'gpu_id': 0,
+        
+        # 트리 구조 관련 파라미터
+        'max_depth': trial.suggest_int('max_depth', 3, 12),
+        'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
+        'gamma': trial.suggest_float('gamma', 1e-8, 1.0, log=True),
+        
+        # 학습 관련 파라미터
+        'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-1, log=True),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        'subsample': trial.suggest_float('subsample', 0.4, 1.0),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
+        
+        # 정규화 관련 파라미터
+        'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+    }
+    
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = []
+
+    for train_idx, valid_idx in kf.split(X_train):
+        X_t, X_v = X_train[train_idx], X_train[valid_idx]
+        y_t, y_v = y_train[train_idx], y_train[valid_idx]
+        
+
+        model = xgb.XGBRegressor(**param)
+        model.fit(
+            X_t, y_t,
+            eval_set=[(X_v, y_v)],
+            verbose=False
+        )
         
         pred = model.predict(X_v)
         score = mean_squared_error(y_v, pred)
@@ -308,16 +345,16 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
     return np.mean(scores)
 
 def optimize_models(X_train, y_train, X_val, y_val, n_trials=50):
-    # LightGBM 최적화
-    print("Optimizing LightGBM...")
-    study_lgb = optuna.create_study(direction='minimize')
-    study_lgb.optimize(lambda trial: objective_lgb(trial, X_train, y_train, X_val, y_val), 
-                      n_trials=n_trials)
-    
     # XGBoost 최적화
     print("\nOptimizing XGBoost...")
     study_xgb = optuna.create_study(direction='minimize')
     study_xgb.optimize(lambda trial: objective_xgb(trial, X_train, y_train, X_val, y_val), 
+                      n_trials=n_trials)
+    
+    # LightGBM 최적화
+    print("Optimizing LightGBM...")
+    study_lgb = optuna.create_study(direction='minimize')
+    study_lgb.optimize(lambda trial: objective_lgb(trial, X_train, y_train, X_val, y_val), 
                       n_trials=n_trials)
     
     print("\nBest LightGBM parameters:", study_lgb.best_params)
@@ -327,20 +364,20 @@ def optimize_models(X_train, y_train, X_val, y_val, n_trials=50):
 
 # LightGBM 및 XGBoost 모델 학습
 def train_models(X_train, y_train, X_val, y_val):
-    print("Training LSTM...")
-    lstm_model, best_hps = tune_lstm_model(X_train, y_train)
-    
-    if lstm_model is None:
-        print("LSTM model training failed")
-        return None, None, None, None, None, None
-        
-    lstm_pred = lstm_model.predict(X_val)
-    
     # 2차원 배열로 변환
     X_train_lgb_rf, X_val_lgb_rf = reshape_for_lgb_rf(X_train, X_val)
     
     # LightGBM과 XGBoost 파라미터 최적화
     lgb_params, xgb_params = optimize_models(X_train_lgb_rf, y_train, X_val_lgb_rf, y_val)
+    
+    # XGBoost 모델 학습
+    print("Training XGBoost with optimal parameters...")
+    rf_model = xgb.XGBRegressor(**xgb_params)
+    rf_model.fit(X_train_lgb_rf, y_train,
+                eval_set=[(X_val_lgb_rf, y_val)],
+                early_stopping_rounds=50,
+                verbose=False)
+    rf_pred = rf_model.predict(X_val_lgb_rf)
     
     # LightGBM 모델 학습
     print("\nTraining LightGBM with optimal parameters...")
@@ -351,14 +388,14 @@ def train_models(X_train, y_train, X_val, y_val):
                  verbose=False)
     lgb_pred = lgb_model.predict(X_val_lgb_rf)
     
-    # XGBoost 모델 학습
-    print("Training XGBoost with optimal parameters...")
-    rf_model = xgb.XGBRegressor(**xgb_params)
-    rf_model.fit(X_train_lgb_rf, y_train,
-                eval_set=[(X_val_lgb_rf, y_val)],
-                early_stopping_rounds=50,
-                verbose=False)
-    rf_pred = rf_model.predict(X_val_lgb_rf)
+    print("Training LSTM...")
+    lstm_model, best_hps = tune_lstm_model(X_train, y_train)
+    
+    if lstm_model is None:
+        print("LSTM model training failed")
+        return None, None, None, None, None, None
+        
+    lstm_pred = lstm_model.predict(X_val)
     
     return rf_model, lgb_model, lstm_model, rf_pred, lgb_pred, lstm_pred
 
