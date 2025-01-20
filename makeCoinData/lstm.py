@@ -132,8 +132,8 @@ def visualize_yearly_data(df, ticker, save_dir="F:/work space/coin/price_data/vi
         
         # Save the plot
         save_path = f"{save_dir}/{ticker}_{year}_analysis.png"
+        plt.savefig(save_path)
         plt.show()
-        #plt.savefig(save_path)
         plt.close()
         
         print(f"Saved visualization for {ticker} - {year} to {save_path}")
@@ -425,7 +425,7 @@ def main():
     selected_tickers = ['KRW-BTC', 'KRW-ETH']
     ticker_data = preprocess_ticker_data(df, selected_tickers)
     # 데이터 정보 출력
-    print_data_info(df)
+    #print_data_info(df)
     for ticker in selected_tickers:
         print(f"\nProcessing visualization for {ticker}")
         ticker_df = df[df['ticker'] == ticker].copy()
