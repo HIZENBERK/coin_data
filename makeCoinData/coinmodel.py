@@ -16,6 +16,10 @@ from keras.losses import Huber
 from sklearn.preprocessing import StandardScaler
 import optuna
 import xgboost as xgb
+import os
+import json
+from keras.layers import BatchNormalization
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
@@ -136,44 +140,98 @@ def build_lstm_model(hp):
     model.add(LSTM(
         units=hp.Int('units', min_value=32, max_value=128, step=32),
         input_shape=(60, 9),
-        return_sequences=False,
-        # Gradient clipping 추가
+        return_sequences=True,
+        kernel_initializer='glorot_uniform',  # Xavier/Glorot 초기화
+        recurrent_initializer='orthogonal',   # 직교 행렬 초기화
+        # Gradient Clipping 강화
         kernel_constraint=tf.keras.constraints.MaxNorm(3),
-        recurrent_constraint=tf.keras.constraints.MaxNorm(3)
+        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
+        bias_constraint=tf.keras.constraints.MaxNorm(3)
     ))
-    model.add(Dropout(hp.Float('dropout', 0.1, 0.5, step=0.1)))
+    model.add(BatchNormalization())  # 배치 정규화 추가
+    model.add(Dropout(hp.Float('dropout1', 0.1, 0.3, step=0.1)))
+    
+    model.add(LSTM(
+        units=hp.Int('units', min_value=16, max_value=64, step=16),
+        return_sequences=False,
+        kernel_initializer='glorot_uniform',
+        recurrent_initializer='orthogonal',
+        kernel_constraint=tf.keras.constraints.MaxNorm(3),
+        recurrent_constraint=tf.keras.constraints.MaxNorm(3),
+        bias_constraint=tf.keras.constraints.MaxNorm(3)
+    ))
+    model.add(BatchNormalization())
+    model.add(Dropout(hp.Float('dropout2', 0.1, 0.3, step=0.1)))
+    
+    model.add(Dense(32, activation='relu'))
+    model.add(BatchNormalization())
+    model.add(Dropout(hp.Float('dropout3', 0.1, 0.3, step=0.1)))
+    
     model.add(Dense(1))
     
-    # Learning rate 범위 조정
+    optimizer = Adam(
+        learning_rate=hp.Choice('lr', [1e-4, 5e-4, 1e-3]),  # learning rate 범위 조정
+        clipnorm=1.0  # gradient clipping 추가
+    )
+    
     model.compile(
-        optimizer=Adam(
-            learning_rate=hp.Choice('lr', [1e-25, 5e-25, 1e-26])
-        ),
-        loss=Huber()  # MSE 대신 Huber loss 사용
+        optimizer=optimizer,
+        loss=Huber(delta=1.0)  # Huber loss의 delta 값 명시
     )
     return model
 
-# LSTM 최적화
+# LSTM 최적화 함수도 수정
 def tune_lstm_model(X_train, y_train):
     print(f"Input shapes - X_train: {X_train.shape}, y_train: {y_train.shape}")
+    
+    # 데이터 체크
+    print("Data statistics:")
+    print(f"X_train mean: {np.mean(X_train)}, std: {np.std(X_train)}")
+    print(f"y_train mean: {np.mean(y_train)}, std: {np.std(y_train)}")
     print("NaN in X_train:", np.isnan(X_train).any())
     print("NaN in y_train:", np.isnan(y_train).any())
     print("Inf in X_train:", np.isinf(X_train).any())
     print("Inf in y_train:", np.isinf(y_train).any())
+    
+    # 튜너 설정
     tuner = RandomSearch(
         build_lstm_model,
         objective='val_loss',
-        max_trials=10,
-        executions_per_trial=10,
+        max_trials=5,  # 시도 횟수 줄임
+        executions_per_trial=3,
         directory='F:\work space\coin\price_data\models\searching',
         project_name='lstm_tuning'
     )
+    
+    # 콜백 설정
+    callbacks = [
+        TerminateOnNaN(),
+        EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
+        ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
+            verbose=1
+        )
+    ]
+    
     try:
-        tuner.search(X_train, y_train, epochs=10, validation_split=0.2, verbose=1, callbacks=[TerminateOnNaN()])
+        tuner.search(
+            X_train, 
+            y_train,
+            epochs=20,
+            batch_size=64,  # 배치 사이즈 증가
+            validation_split=0.2,
+            callbacks=callbacks,
+            verbose=1
+        )
     except Exception as e:
         print(f"Tuning failed: {e}")
+        
     best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
     model = tuner.hypermodel.build(best_hps)
+    
     return model, best_hps
 
 # LightGBM 및 XGBoost 모델 학습
@@ -208,7 +266,7 @@ def train_models(X_train, y_train, X_val, y_val):
         verbose=1
     )
     lstm_pred = lstm_model.predict(X_val_lstm)
-    
+    print(lstm_pred)
     print("Training LightGBM...")
     
     # 2차원 배열로 변환
@@ -258,12 +316,44 @@ def stack_models(rf_pred, lgb_pred, lstm_pred, y_val):
     return meta_model
 
 # 모델 저장
-def save_model(model, score, ticker, directory="F:/work space/coin/price_data/models"):
+def save_models(meta_model, rf_model, lgb_model, lstm_model, scaler, target_scaler, score, ticker, directory="F:/work space/coin/price_data/models"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"model_{ticker}_{timestamp}_{score:.4f}.pkl"
-    file_path = f"{directory}/{file_name}"
-    joblib.dump(model, file_path)
-    print(f"Model for {ticker} saved to {file_path}")
+    
+    # 메인 디렉토리 생성
+    base_dir = f"{directory}/{ticker}_{timestamp}"
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+    
+    # 메타 모델 저장
+    meta_model_path = f"{base_dir}/meta_model_{score:.4f}.pkl"
+    joblib.dump(meta_model, meta_model_path)
+    
+    # 기본 모델들 저장
+    joblib.dump(rf_model, f"{base_dir}/rf_model.pkl")
+    joblib.dump(lgb_model, f"{base_dir}/lgb_model.pkl")
+    lstm_model.save(f"{base_dir}/lstm_model")  # LSTM은 .save() 메소드 사용
+    
+    # 스케일러 저장
+    joblib.dump(scaler, f"{base_dir}/scaler.pkl")
+    joblib.dump(target_scaler, f"{base_dir}/target_scaler.pkl")
+    
+    print(f"All models for {ticker} saved to {base_dir}")
+    
+    # 모델 경로 정보를 담은 딕셔너리 반환
+    model_paths = {
+        'meta_model': meta_model_path,
+        'rf_model': f"{base_dir}/rf_model.pkl",
+        'lgb_model': f"{base_dir}/lgb_model.pkl",
+        'lstm_model': f"{base_dir}/lstm_model",
+        'scaler': f"{base_dir}/scaler.pkl",
+        'target_scaler': f"{base_dir}/target_scaler.pkl"
+    }
+    
+    # 경로 정보를 JSON 파일로 저장
+    with open(f"{base_dir}/model_paths.json", 'w') as f:
+        json.dump(model_paths, f, indent=4)
+    
+    return model_paths
 
 # 데이터 로드
 start_year, end_year = 2019, 2025
@@ -296,8 +386,20 @@ for ticker, (X, y, scaler, target_scaler) in ticker_data.items():
     mse = mean_squared_error(y_val, final_preds)
     print(f"{ticker} - Mean Squared Error: {mse}")
     
-    # 모델 저장
-    save_model(meta_model, mse, ticker)
+    # 모든 모델 저장
+    model_paths = save_models(
+        meta_model, 
+        rf_model, 
+        lgb_model, 
+        lstm_model, 
+        scaler,
+        target_scaler,
+        mse, 
+        ticker
+    )
     
     # 모든 메타 모델 저장
-    all_meta_models[ticker] = meta_model
+    all_meta_models[ticker] = {
+        'model': meta_model,
+        'paths': model_paths
+    }
