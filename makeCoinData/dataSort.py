@@ -18,16 +18,19 @@ for year in range(2019, 2026):
             # CSV 파일 읽기
             df = pd.read_csv(file_path)
 
+            # ticker가 ['KRW-BTC', 'KRW-ETH']인 데이터만 필터링
+            df_filtered = df[df['ticker'].isin(['KRW-BTC', 'KRW-ETH'])]
+
             # timestamp 컬럼을 datetime으로 변환
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df_filtered['timestamp'] = pd.to_datetime(df_filtered['timestamp'])
 
             # timestamp 기준으로 정렬
-            df_sorted = df.sort_values(by='timestamp', ascending=True)
+            df_sorted = df_filtered.sort_values(by='timestamp', ascending=True)
 
             # 정렬된 데이터 저장
             df_sorted.to_csv(file_path, index=False)
 
-            print(f"{file_name} 파일 정렬 및 저장 완료.")
+            print(f"{file_name} 파일 필터링, 정렬 및 저장 완료.")
         except Exception as e:
             print(f"{file_name} 파일 처리 중 오류 발생: {e}")
     else:

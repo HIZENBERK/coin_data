@@ -12,6 +12,9 @@ from keras.losses import Huber
 from sklearn.preprocessing import StandardScaler
 import os
 import json
+import matplotlib.pyplot as plt
+from datetime import datetime
+import seaborn as sns
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
@@ -55,6 +58,94 @@ def create_sequences(data, window_size):
         y.append(target[i + window_size])
     
     return np.array(X), np.array(y), scaler, target_scaler
+
+def visualize_yearly_data(df, ticker, save_dir="F:/work space/coin/price_data/visualizations"):
+    # Ensure save directory exists
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # Convert timestamp to datetime if it's not already
+    try:
+        df['datetime'] = pd.to_datetime(df['timestamp'])
+    except Exception as e:
+        print(f"Error converting timestamp: {e}")
+        print("Timestamp sample:", df['timestamp'].iloc[0])
+        return
+    
+    # Group data by year
+    df['year'] = df['datetime'].dt.year
+    years = df['year'].unique()
+    
+    for year in years:
+        year_data = df[df['year'] == year].copy()
+        
+        # Create figure with subplots
+        fig = plt.figure(figsize=(20, 15))
+        
+        # Price plot
+        ax1 = plt.subplot(3, 1, 1)
+        ax1.plot(year_data['datetime'], year_data['close'], label='Close Price', color='black')
+        ax1.set_title(f'{ticker} Price Movement - {year}')
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel('Price')
+        ax1.grid(True)
+        ax1.legend()
+        
+        # RSI and MACD plot
+        ax2 = plt.subplot(3, 1, 2)
+        ax2.plot(year_data['datetime'], year_data['RSI'], label='RSI', color='blue')
+        ax2.axhline(y=70, color='r', linestyle='--', alpha=0.5)
+        ax2.axhline(y=30, color='r', linestyle='--', alpha=0.5)
+        ax2_twin = ax2.twinx()
+        ax2_twin.plot(year_data['datetime'], year_data['MACD'], label='MACD', color='green')
+        ax2_twin.plot(year_data['datetime'], year_data['Signal'], label='Signal', color='red')
+        
+        # Add legends for both y-axes
+        lines1, labels1 = ax2.get_legend_handles_labels()
+        lines2, labels2 = ax2_twin.get_legend_handles_labels()
+        ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        
+        ax2.set_title('Technical Indicators - RSI and MACD')
+        ax2.set_xlabel('Date')
+        ax2.set_ylabel('RSI')
+        ax2_twin.set_ylabel('MACD')
+        ax2.grid(True)
+        
+        # Volatility and Price Change plot
+        ax3 = plt.subplot(3, 1, 3)
+        ax3.plot(year_data['datetime'], year_data['Volatility'], label='Volatility', color='purple')
+        ax3_twin = ax3.twinx()
+        ax3_twin.plot(year_data['datetime'], year_data['PriceChange'], label='Price Change %', color='orange')
+        
+        # Add legends for both y-axes
+        lines1, labels1 = ax3.get_legend_handles_labels()
+        lines2, labels2 = ax3_twin.get_legend_handles_labels()
+        ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        
+        ax3.set_title('Volatility and Price Change')
+        ax3.set_xlabel('Date')
+        ax3.set_ylabel('Volatility')
+        ax3_twin.set_ylabel('Price Change %')
+        ax3.grid(True)
+        
+        plt.tight_layout()
+        
+        # Save the plot
+        save_path = f"{save_dir}/{ticker}_{year}_analysis.png"
+        plt.show()
+        #plt.savefig(save_path)
+        plt.close()
+        
+        print(f"Saved visualization for {ticker} - {year} to {save_path}")
+
+def print_data_info(df):
+    """데이터 정보를 출력하는 헬퍼 함수"""
+    print("\nDataset Info:")
+    print(f"Shape: {df.shape}")
+    print("\nColumns:", df.columns.tolist())
+    print("\nSample of timestamp values:", df['timestamp'].head())
+    print("\nData Types:")
+    print(df.dtypes)
 
 # LSTM 모델 정의
 def build_lstm_model(hp):
@@ -333,6 +424,12 @@ def main():
     # 학습할 티커 선택
     selected_tickers = ['KRW-BTC', 'KRW-ETH']
     ticker_data = preprocess_ticker_data(df, selected_tickers)
+    # 데이터 정보 출력
+    print_data_info(df)
+    for ticker in selected_tickers:
+        print(f"\nProcessing visualization for {ticker}")
+        ticker_df = df[df['ticker'] == ticker].copy()
+        visualize_yearly_data(ticker_df, ticker)
     #print(ticker_data)
     #saved_dir = save_ticker_data(ticker_data)
     #print(f"Saved ticker data to: {saved_dir}")
