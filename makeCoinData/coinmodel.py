@@ -228,6 +228,7 @@ def objective_lgb(trial, X_train, y_train, X_val, y_val):
     return mse
 
 def objective_xgb(trial, X_train, y_train, X_val, y_val):
+    n_estimators = trial.suggest_int('n_estimators', 100, 1000)
     param = {
         'objective': 'reg:squarederror',
         'tree_method': 'hist',
@@ -240,7 +241,7 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
         
         # 학습 관련 파라미터
         'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-1, log=True),
-        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        #'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
         'subsample': trial.suggest_float('subsample', 0.4, 1.0),
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
         
@@ -251,26 +252,20 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
     
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     scores = []
-
-    # GPU용 DMatrix 생성을 위한 함수
-    def to_gpu_dmatrix(data, label=None):
-        if label is not None:
-            return xgb.DMatrix(data, label=label).cuda()
-        return xgb.DMatrix(data).cuda()
     
     for train_idx, valid_idx in kf.split(X_train):
         X_t, X_v = X_train[train_idx], X_train[valid_idx]
         y_t, y_v = y_train[train_idx], y_train[valid_idx]
         
-        # GPU용 DMatrix로 변환
-        dtrain = to_gpu_dmatrix(X_t, y_t)
-        dvalid = to_gpu_dmatrix(X_v, y_v)
+        # 일반 DMatrix 생성 (GPU 사용은 tree_method와 device 파라미터로 처리)
+        dtrain = xgb.DMatrix(X_t, label=y_t)
+        dvalid = xgb.DMatrix(X_v, label=y_v)
         
         # XGBoost 모델 생성 및 학습
         model = xgb.train(
             param,
             dtrain,
-            num_boost_round=param['n_estimators'],
+            num_boost_round=n_estimators,  # param에서 제거하고 여기서 직접 사용
             evals=[(dvalid, 'eval')],
             verbose_eval=False
         )
