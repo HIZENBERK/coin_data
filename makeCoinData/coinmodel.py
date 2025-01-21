@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
 import lightgbm as lgb
@@ -11,7 +11,6 @@ from keras_tuner import RandomSearch
 import joblib
 from datetime import datetime
 import tensorflow as tf
-from tensorflow.keras.callbacks import TerminateOnNaN
 from keras.losses import Huber
 from sklearn.preprocessing import StandardScaler
 import optuna
