@@ -19,41 +19,11 @@ import xgboost as xgb
 import os
 import json
 from keras.layers import BatchNormalization
-from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.constraints import MaxNorm
 from sklearn.model_selection import KFold
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
-# XGBoost 모델 하이퍼파라미터 최적화 함수
-def objective(trial, X_train, y_train, X_val, y_val):
-    # Optuna에서 제공하는 하이퍼파라미터 탐색 공간 설정
-    n_estimators = trial.suggest_categorical('n_estimators', [100, 200, 300, 500])
-    max_depth = trial.suggest_int('max_depth', 10, 30)
-    min_child_weight = trial.suggest_int('min_child_weight', 1, 10)
-    learning_rate = trial.suggest_loguniform('learning_rate', 0.0001, 0.1)
-    
-    # XGBoost 모델 초기화
-    xgb_model_gpu = xgb.XGBRegressor(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        min_child_weight=min_child_weight,
-        learning_rate=learning_rate,
-        tree_method='gpu_hist',  # GPU에서 histogram 방식으로 학습
-        gpu_id=0,                # 첫 번째 GPU 사용
-        random_state=42
-    )
-
-    # 모델 학습
-    xgb_model_gpu.fit(X_train, y_train)
-    
-    # 검증 데이터셋에 대한 예측
-    xgb_pred_gpu = xgb_model_gpu.predict(X_val)
-    
-    # 예측값과 실제 값의 차이를 기반으로 성능 평가 (MSE)
-    mse = np.mean((xgb_pred_gpu - y_val) ** 2)
-    
-    return mse  # MSE가 낮을수록 좋음
 
 # 데이터 로드
 def load_data(file_path):
@@ -257,55 +227,12 @@ def objective_lgb(trial, X_train, y_train, X_val, y_val):
     mse = mean_squared_error(y_val, y_pred)
     
     return mse
-"""
-def objective_xgb(trial, X_train, y_train, X_val, y_val):
-    param = {
-        'objective': 'reg:squarederror',
-        'tree_method': 'gpu_hist',
-        'gpu_id': 0,
-        
-        # 트리 구조 관련 파라미터
-        'max_depth': trial.suggest_int('max_depth', 3, 12),
-        'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
-        'gamma': trial.suggest_loguniform('gamma', 1e-8, 1.0),
-        
-        # 학습 관련 파라미터
-        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1e-1),
-        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
-        'subsample': trial.suggest_uniform('subsample', 0.4, 1.0),
-        'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.4, 1.0),
-        
-        # 정규화 관련 파라미터
-        'reg_alpha': trial.suggest_loguniform('reg_alpha', 1e-8, 10.0),
-        'reg_lambda': trial.suggest_loguniform('reg_lambda', 1e-8, 10.0),
-    }
-    
-    # Cross-validation을 통한 안정적인 성능 평가
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    scores = []
-    
-    for train_idx, valid_idx in kf.split(X_train):
-        X_t, X_v = X_train[train_idx], X_train[valid_idx]
-        y_t, y_v = y_train[train_idx], y_train[valid_idx]
-        
-        model = xgb.XGBRegressor(**param)
-        model.fit(X_t, y_t,
-                 eval_set=[(X_v, y_v)],
-                 callbacks=[xgb.callback.EarlyStopping(rounds=50)],
-                 verbose=False)
-        
-        pred = model.predict(X_v)
-        score = mean_squared_error(y_v, pred)
-        scores.append(score)
-    
-    return np.mean(scores)
-"""
+
 def objective_xgb(trial, X_train, y_train, X_val, y_val):
     param = {
         'objective': 'reg:squarederror',
         'tree_method': 'hist',
         "device" : "cuda",
-        #'gpu_id': 0,
         
         # 트리 구조 관련 파라미터
         'max_depth': trial.suggest_int('max_depth', 3, 12),
@@ -375,7 +302,7 @@ def train_models(X_train, y_train, X_val, y_val):
     rf_model = xgb.XGBRegressor(**xgb_params)
     rf_model.fit(X_train_lgb_rf, y_train,
                 eval_set=[(X_val_lgb_rf, y_val)],
-                early_stopping_rounds=50,
+                #early_stopping_rounds=50,
                 verbose=False)
     rf_pred = rf_model.predict(X_val_lgb_rf)
     
@@ -384,7 +311,7 @@ def train_models(X_train, y_train, X_val, y_val):
     lgb_model = lgb.LGBMRegressor(**lgb_params)
     lgb_model.fit(X_train_lgb_rf, y_train,
                  eval_set=[(X_val_lgb_rf, y_val)],
-                 early_stopping_rounds=50,
+                 #early_stopping_rounds=50,
                  verbose=False)
     lgb_pred = lgb_model.predict(X_val_lgb_rf)
     
