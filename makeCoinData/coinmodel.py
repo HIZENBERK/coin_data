@@ -252,19 +252,31 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     scores = []
 
+    # GPU용 DMatrix 생성을 위한 함수
+    def to_gpu_dmatrix(data, label=None):
+        if label is not None:
+            return xgb.DMatrix(data, label=label).cuda()
+        return xgb.DMatrix(data).cuda()
+    
     for train_idx, valid_idx in kf.split(X_train):
         X_t, X_v = X_train[train_idx], X_train[valid_idx]
         y_t, y_v = y_train[train_idx], y_train[valid_idx]
         
-
-        model = xgb.XGBRegressor(**param)
-        model.fit(
-            X_t, y_t,
-            eval_set=[(X_v, y_v)],
-            verbose=False
+        # GPU용 DMatrix로 변환
+        dtrain = to_gpu_dmatrix(X_t, y_t)
+        dvalid = to_gpu_dmatrix(X_v, y_v)
+        
+        # XGBoost 모델 생성 및 학습
+        model = xgb.train(
+            param,
+            dtrain,
+            num_boost_round=param['n_estimators'],
+            evals=[(dvalid, 'eval')],
+            verbose_eval=False
         )
         
-        pred = model.predict(X_v)
+        # 예측
+        pred = model.predict(dvalid)
         score = mean_squared_error(y_v, pred)
         scores.append(score)
     
