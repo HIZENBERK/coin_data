@@ -20,9 +20,14 @@ import json
 from keras.layers import BatchNormalization
 from tensorflow.keras.constraints import MaxNorm
 from sklearn.model_selection import KFold
+import winsound as sd
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
+def beepsound():
+    fr = 2000    # range : 37 ~ 32767
+    du = 1000     # 1000 ms ==1second
+    sd.Beep(fr, du) # winsound.Beep(frequency, duration)
 
 # 데이터 로드
 def load_data(file_path):
@@ -269,6 +274,7 @@ def objective_xgb(trial, X_train, y_train, X_val, y_val):
             evals=[(dvalid, 'eval')],
             verbose_eval=False
         )
+    
         
         # 예측
         pred = model.predict(dvalid)
@@ -308,7 +314,6 @@ def train_models(X_train, y_train, X_val, y_val):
     rf_model = xgb.XGBRegressor(**xgb_params)
     rf_model.fit(X_train_lgb_rf, y_train,
                 eval_set=[(X_val_lgb_rf, y_val)],
-                #early_stopping_rounds=50,
                 verbose=False)
     rf_pred = rf_model.predict(X_val_lgb_rf)
     
@@ -316,9 +321,8 @@ def train_models(X_train, y_train, X_val, y_val):
     print("\nTraining LightGBM with optimal parameters...")
     lgb_model = lgb.LGBMRegressor(**lgb_params)
     lgb_model.fit(X_train_lgb_rf, y_train,
-                 eval_set=[(X_val_lgb_rf, y_val)],
-                 #early_stopping_rounds=50,
-                 verbose=False)
+                 eval_set=[(X_val_lgb_rf, y_val)]
+                 )
     lgb_pred = lgb_model.predict(X_val_lgb_rf)
     
     print("Training LSTM...")
@@ -341,44 +345,59 @@ def stack_models(rf_pred, lgb_pred, lstm_pred, y_val):
     return meta_model
 
 # 모델 저장
-def save_models(meta_model, rf_model, lgb_model, lstm_model, scaler, target_scaler, score, ticker, directory="F:/work space/coin/price_data/models"):
+def save_models(meta_model, rf_model, lgb_model, lstm_model, scaler, target_scaler, score, best_hps, lgb_params, xgb_params, ticker, directory="F:/work space/coin/price_data/models"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     # 메인 디렉토리 생성
     base_dir = f"{directory}/{ticker}_{timestamp}"
     if not os.path.exists(base_dir):
         os.makedirs(base_dir)
-    
+
     # 메타 모델 저장
     meta_model_path = f"{base_dir}/meta_model_{score:.4f}.pkl"
     joblib.dump(meta_model, meta_model_path)
-    
+
     # 기본 모델들 저장
-    joblib.dump(rf_model, f"{base_dir}/rf_model.pkl")
-    joblib.dump(lgb_model, f"{base_dir}/lgb_model.pkl")
-    lstm_model.save(f"{base_dir}/lstm_model")  # LSTM은 .save() 메소드 사용
-    
+    rf_model_path = f"{base_dir}/rf_model.pkl"
+    lgb_model_path = f"{base_dir}/lgb_model.pkl"
+    lstm_model_path = f"{base_dir}/lstm_model"
+
+    joblib.dump(rf_model, rf_model_path)
+    joblib.dump(lgb_model, lgb_model_path)
+    lstm_model.save(lstm_model_path)  # LSTM은 .save() 메소드 사용
+
     # 스케일러 저장
-    joblib.dump(scaler, f"{base_dir}/scaler.pkl")
-    joblib.dump(target_scaler, f"{base_dir}/target_scaler.pkl")
-    
-    print(f"All models for {ticker} saved to {base_dir}")
-    
-    # 모델 경로 정보를 담은 딕셔너리 반환
-    model_paths = {
-        'meta_model': meta_model_path,
-        'rf_model': f"{base_dir}/rf_model.pkl",
-        'lgb_model': f"{base_dir}/lgb_model.pkl",
-        'lstm_model': f"{base_dir}/lstm_model",
-        'scaler': f"{base_dir}/scaler.pkl",
-        'target_scaler': f"{base_dir}/target_scaler.pkl"
+    scaler_path = f"{base_dir}/scaler.pkl"
+    target_scaler_path = f"{base_dir}/target_scaler.pkl"
+
+    joblib.dump(scaler, scaler_path)
+    joblib.dump(target_scaler, target_scaler_path)
+
+    # 모델 및 파라미터 정보 저장
+    model_info = {
+        'meta_model_path': meta_model_path,
+        'rf_model_path': rf_model_path,
+        'lgb_model_path': lgb_model_path,
+        'lstm_model_path': lstm_model_path,
+        'scaler_path': scaler_path,
+        'target_scaler_path': target_scaler_path,
+        'score': score,
+        'best_hps': best_hps,  # LSTM 설정 저장
+        'lgb_params': lgb_params,  # LightGBM 파라미터 저장
+        'xgb_params': xgb_params,  # XGBoost 파라미터 저장
+        'ticker': ticker,
+        'timestamp': timestamp
     }
-    
-    # 경로 정보를 JSON 파일로 저장
-    with open(f"{base_dir}/model_paths.json", 'w') as f:
-        json.dump(model_paths, f, indent=4)
-    
-    return model_paths
+
+    # 경로 및 정보 JSON 파일로 저장
+    model_info_path = f"{base_dir}/model_info.json"
+    with open(model_info_path, 'w', encoding='utf-8') as f:
+        json.dump(model_info, f, indent=4, ensure_ascii=False)
+
+    print(f"All models and configurations for {ticker} saved to {base_dir}")
+
+    return model_info
+
 
 # 데이터 로드
 start_year, end_year = 2020, 2025
@@ -437,3 +456,4 @@ with open(f"{output_dir}/all_models_info_{timestamp}.json", 'w', encoding='utf-8
     json.dump(all_models_info, f, indent=4, ensure_ascii=False)
 
 print("\nAll models have been trained and saved successfully!")
+beepsound()
